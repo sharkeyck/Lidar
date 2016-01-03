@@ -5,136 +5,101 @@
 
 import thread, time, sys, traceback, math
 
-com_port = "COM4" # example: 5 == "COM6" == "/dev/tty5"
-baudrate = 115200
-visualization = True
-
-offset = 140
+COM_PORT = "COM4" # example: 5 == "COM6" == "/dev/tty5"
+BAUD_RATE = 115200
+FPS = 60
+OFFSET = 140
 init_level = 0
 index = 0
 
-lidarData = [[] for i in range(360)] #A list of 360 elements Angle, Distance , quality
+from visual import *
+point = points(pos=[(0,0,0) for i in range(360)], size=5, color=(0 , 1, 0)) #green, good point
+lidar_representation = ring(pos=(0,0,0), axis=(0,1,0), radius=OFFSET-1, thickness=1, color = color.yellow)
+lidar_representation.visible = True
+
+label_speed = label(pos = (0,-500,0), xoffset=1, box=False, opacity=0.1)
+label_errors = label(pos = (0,-1000,0), xoffset=1, text="errors: 0", visible = False, box=False)
 
 
-if visualization:
-    from visual import *
-# sample and intensity points
-    point = points(pos=[(0,0,0) for i in range(360)], size=5, color=(0 , 1, 0)) #green, good point
-    pointb = points(pos=[(0,0,0) for i in range(360)], size=5, color=(0.4, 0, 0)) #red, low quality point
-    #point2 = points(pos=[(0,0,0) for i in range(360)], size=3, color=(1 , 1, 0)) #yellow, intensity of good point
-    #point2b = points(pos=[(0,0,0) for i in range(360)], size=3, color=(0.4, 0.4, 0)) #dark yellow, intensity of bad point
-    #lines
-    outer_line= curve (pos=[(0,0,0) for i in range(360)], size=5, color=(1 , 0, 0))
-    lines=[curve(pos=[(offset*cos(i* pi / 180.0),0,offset*-sin(i* pi / 180.0)),(offset*cos(i* pi / 180.0),0,offset*-sin(i* pi / 180.0))], color=[(0.1, 0.1, 0.2),(1,0,0)]) for i in range(360)]
-    zero_intensity_ring = ring(pos=(0,0,0), axis=(0,1,0), radius=offset-1, thickness=1, color = color.yellow)
-
-    label_speed = label(pos = (0,-500,0), xoffset=1, box=False, opacity=0.1)
-    label_errors = label(pos = (0,-1000,0), xoffset=1, text="errors: 0", visible = False, box=False)
-
-use_points = True
-use_outer_line = False
-use_lines = False
-use_intensity = False
-
-def reset_display(angle):
-    global offset, use_outer_line, use_lines
-    #reset the point display
-    
+def reset_display( angle ):
     angle_rad = angle * math.pi / 180.0
     c = math.cos(angle_rad)
     s = -math.sin(angle_rad)
     
-    point.pos[angle] = vector( 0, 0, 0 )
-    pointb.pos[angle] = vector( 0, 0, 0 )
-    #point2.pos[angle] = vector( 0, 0, 0 )
-    #point2b.pos[angle] = vector( 0, 0, 0 )
-    if not use_lines : lines[angle].pos[1]=(offset*c,0,offset*s)
-    if not use_outer_line :
-        outer_line.pos[angle]=(offset*c,0,offset*s)
-        outer_line.color[angle] = (0.1, 0.1, 0.2)
-          
-def update_view( angle, data ):
+    #reset the point display    
+    point.pos[angle] = vector( 0, 0, 0 )         
+         
+def parse_point_data( angle, data ):
+    dist_mm = data[0] | (( data[1] & 0x3f) << 8) # distance is coded on 14 bits
+    quality = data[2] | (data[3] << 8) # quality is on 16 bits
+    is_bad_data = data[1] & 0x80
+    is_low_quality = data[1] & 0x40
+    parsed_data = (dist_mm, is_bad_data, is_low_quality)
+    return parsed_data
+    
+def update_point( angle, data ):
     """Updates the view of a sample.
 
 Takes the angle (an int, from 0 to 359) and the list of four bytes of data in the order they arrived.
 """
-    global offset, use_outer_line, use_line
-    #unpack data using the denomination used during the discussions
-    x = data[0]
-    x1= data[1]
-    x2= data[2]
-    x3= data[3]
+    
+    (dist_mm, is_bad_data, is_low_quality) = parse_point_data(angle, data)
     
     angle_rad = angle * math.pi / 180.0
     c = math.cos(angle_rad)
     s = -math.sin(angle_rad)
-
-    dist_mm = x | (( x1 & 0x3f) << 8) # distance is coded on 13 bits ? 14 bits ?
-    quality = x2 | (x3 << 8) # quality is on 16 bits
-    lidarData[angle] = [dist_mm,quality]
+    
     dist_x = dist_mm*c
     dist_y = dist_mm*s
-    if visualization:
-        reset_display(angle)
-        
-        # display the sample
-        if x1 & 0x80: # is the flag for "bad data" set?
-            # yes it's bad data
-            lines[angle].pos[1]=(offset*c,0,offset*s)
-            outer_line.pos[angle]=(offset*c,0,offset*s)
-            outer_line.color[angle] = (0.1, 0.1, 0.2)
+           
+    reset_display(angle)
+    # display the sample
+    if is_bad_data:
+        # FIGURE OUT EQUAL WITH POINTS TODO
+        return
+    else:
+        point.pos[angle] = vector( dist_x,0, dist_y)
+        if is_low_quality:
+            point.color[angle] =(0.4, 0, 0) #red for low quality
         else:
-            # no, it's cool
-            if not x1 & 0x40:
-                # X+1:6 not set : quality is OK
-                if use_points : point.pos[angle] = vector( dist_x,0, dist_y)
-                #if use_intensity : point2.pos[angle] = vector( (quality + offset)*c,0, (quality + offset)*s)
-                if use_lines : lines[angle].color[1] = (1,0,0)
-                if use_outer_line : outer_line.color[angle] = (1,0,0)
-            else:
-                # X+1:6 set : Warning, the quality is not as good as expected
-                if use_points : pointb.pos[angle] = vector( dist_x,0, dist_y)
-                #if use_intensity : point2b.pos[angle] = vector( (quality + offset)*c,0, (quality + offset)*s)
-                if use_lines : lines[angle].color[1] = (0.4,0,0)
-                if use_outer_line : outer_line.color[angle] = (0.4,0,0)
-            if use_lines : lines[angle].pos[1]=( dist_x, 0, dist_y)
-            if use_outer_line : outer_line.pos[angle]=( dist_x, 0, dist_y)
+            point.color[angle] =(0, 1, 0) #green for good quality
 
 
-
-
-def checksum(data):
-    """Compute and return the checksum as an int.
+def check_sum(data):
+    """Compute and return the check_sum as an int.
 
 data -- list of 20 bytes (as ints), in the order they arrived in.
 """
     # group the data by word, little-endian
     data_list = []
     for t in range(10):
+        #TODO make less confusing
         data_list.append( data[2*t] + (data[2*t+1]<<8) )
     
-    # compute the checksum on 32 bits
+    # compute the check_sum on 32 bits
     chk32 = 0
     for d in data_list:
         chk32 = (chk32 << 1) + d
 
     # return a value wrapped around on 15bits, and truncated to still fit into 15 bits
-    checksum = (chk32 & 0x7FFF) + ( chk32 >> 15 ) # wrap around to fit into 15 bits
-    checksum = checksum & 0x7FFF # truncate to 15 bits
-    return int( checksum )
+    check_sum = (chk32 & 0x7FFF) + ( chk32 >> 15 ) # wrap around to fit into 15 bits
+    check_sum = check_sum & 0x7FFF # truncate to 15 bits
+    return int( check_sum )
 
-
-def gui_update_speed(speed_rpm):
-    label_speed.text = "RPM : " + str(speed_rpm)
-
-def compute_speed(data):
-    speed_rpm = float( data[0] | (data[1] << 8) ) / 64.0
-    return speed_rpm
-
-def read_Lidar():
-    global init_level, angle, index
+def read_lidar():
+    global init_level, index
+    #TODO variable for each index in full_data?
+    #data string: <start> <index> <speed_L> <speed_H> [Data 0] [Data 1] [Data 2] [Data 3] <checksum_L> <checksum_H>
+    #INDEX_BYTE = 1
+    #SPEED_BYTES = [2,3]
+    #DATA_BYTES = [[4,5,6,7],......], ect
     
-    nb_errors = 0
+    SPEED_PACKETS = 2
+    DATA_PACKETS = 4
+    DATA_BYTES = 4
+    PACKET_BYTES = 22
+    check_sum_errors = 0
+    
     while True:
         try:
             time.sleep(0.00001) # do not hog the processor power
@@ -142,11 +107,8 @@ def read_Lidar():
             if init_level == 0 :
                 b = ord(ser.read(1))
                 # start byte
-                if b == 0xFA :
-                    init_level = 1
-                    #print lidarData
-                else:
-                    init_level = 0
+                init_level = (b == 0xFA)
+                
             elif init_level == 1:
                 # position index
                 b = ord(ser.read(1))
@@ -160,79 +122,90 @@ def read_Lidar():
                 b_speed = [ ord(b) for b in ser.read(2)]
                 
                 # data
-                b_data0 = [ ord(b) for b in ser.read(4)]
-                b_data1 = [ ord(b) for b in ser.read(4)]
-                b_data2 = [ ord(b) for b in ser.read(4)]
-                b_data3 = [ ord(b) for b in ser.read(4)]
+                b_data = [[ord(b) for b in ser.read(DATA_BYTES)] for inc in range(DATA_PACKETS)]
 
                 # for the checksum, we need all the data of the packet...
                 # this could be collected in a more elegent fashion...
-                all_data = [ 0xFA, index+0xA0 ] + b_speed + b_data0 + b_data1 + b_data2 + b_data3
+                all_data = [ 0xFA, index+0xA0 ] + b_speed + b_data[0] + b_data[1] + b_data[2] + b_data[3]
 
                 # checksum
-                b_checksum = [ ord(b) for b in ser.read(2) ]
-                incoming_checksum = int(b_checksum[0]) + (int(b_checksum[1]) << 8)
+                b_check_sum = [ ord(b) for b in ser.read(2) ]
+                incoming_check_sum = int(b_check_sum[0]) + (int(b_check_sum[1]) << 8)
 
                 # verify that the received checksum is equal to the one computed from the data
-                if checksum(all_data) == incoming_checksum:
-                    speed_rpm = compute_speed(b_speed)
-                    if visualization:
-                        gui_update_speed(speed_rpm)
+                if check_sum(all_data) == incoming_check_sum:
+                    speed_rpm = float( b_speed[0] | (b_speed[1] << 8) ) / 64.0
+                    label_speed.text = "RPM : " + str(speed_rpm)
                     
-                    update_view(index * 4 + 0, b_data0)
-                    update_view(index * 4 + 1, b_data1)
-                    update_view(index * 4 + 2, b_data2)
-                    update_view(index * 4 + 3, b_data3)
+                    for inc in range(DATA_PACKETS):
+                        update_point(index * 4 + inc, b_data[inc])
                 else:
                     # the checksum does not match, something went wrong...
-                    nb_errors +=1
-                    if visualization:
-                        label_errors.text = "errors: "+str(nb_errors)
+                    check_sum_errors +=1
+                    label_errors.text = "errors: "+str(check_sum_errors)
                     
                     # display the samples in an error state
-                    update_view(index * 4 + 0, [0, 0x80, 0, 0])
-                    update_view(index * 4 + 1, [0, 0x80, 0, 0])
-                    update_view(index * 4 + 2, [0, 0x80, 0, 0])
-                    update_view(index * 4 + 3, [0, 0x80, 0, 0])
+                    for inc in range(DATA_PACKETS):
+                        update_point(index * 4 + inc, [0, 0x80, 0, 0])
                     
                 init_level = 0 # reset and wait for the next packet
-                
             else: # default, should never happen...
                 init_level = 0
+                # TODO not needed once init levels gone
                 raise Exception("Default of whatever this is should never have happened")
         except :
+            # TODO remove try/except and handle exceptions locally
             traceback.print_exc(file=sys.stdout)
 
-def checkKeys():
-    global use_outer_line, use_lines, use_points, use_intensity
+                      
+            """if init_level == 0 : #TODO rename to be more packet-y
+                b = ord(ser.read(1)) #TODO look for a read bytes function (not chars)
+                # start byte
+                if b == 0xFA :
+                    #found data packet, compare data check_sum to given check_sum
+                    full_data = [b] + [ord(b) for b in ser.read(PACKET_BYTES-1)]
+                    incoming_check_sum = (int(full_data.pop()) <<8 ) + int(full_data.pop())
+                    if check_sum(full_data) == incoming_check_sum:
+                        #TODO if statements needed? how to except if bad?
+                        if b >= 0xA0 and b <= 0xF9 :
+                            index = full_data[1] - 0xA0
+                        elif b != 0xFA:
+                            init_level = 0
+                        #TODO this is dumb and ugly.
+                        b_speed = [ full_data[2], full_data[3]]
+                        b_data = [full_data[4:8],full_data[8:12],full_data[12:16],full_data[16:20]]
+                        speed_rpm = float( b_speed[0] | (b_speed[1] << 8) ) / 64.0
+                        label_speed.text = "RPM : " + str(speed_rpm)
+                        
+                    else:
+                        # the check_sum does not match, something went wrong...
+                        check_sum_errs +=1
+                        label_errors.text = "errors: "+str(check_sum_errs)
+                        #display the samples in an error state
+                        b_data = [[0, 0x80, 0, 0] for inc in range(DATA_PACKETS)]
+                        
+                    for inc in range(DATA_PACKETS) :
+                        print b_data, inc
+                        update_point(index * 4 + inc, b_data[inc])
+                    init_level = 0
+                else:
+                    init_level = (b == 0xFA)"""  
+            
+def check_keys():
     if scene.kb.keys: # event waiting to be processed?
         s = scene.kb.getkey() # get keyboard info
 
-        if s=="o": # Toggle outer line
-            use_outer_line = not use_outer_line
-        elif s=="l": # Toggle rays
-            use_lines = not use_lines
-        elif s=="p": # Toggle points
-            use_points = not use_points
-        elif s=="i": # Toggle intensity
-            use_intensity = not use_intensity
-            zero_intensity_ring.visible = use_intensity
-
-        elif s=="n": # Toggle lidar representation
-            lidar.visible = not lidar.visible
-
-        elif s=="j": # Toggle rpm
+        if s=="j": # Toggle rpm
             label_speed.visible = not label_speed.visible
         elif s=="k": # Toggle errors
             label_errors.visible = not label_errors.visible
 
 
 import serial
-ser = serial.Serial(com_port, baudrate)
-th = thread.start_new_thread(read_Lidar, ())
+ser = serial.Serial(COM_PORT, BAUD_RATE)
+th = thread.start_new_thread(read_lidar, ())
 
 while True:
-    if visualization:
-        rate(60) # synchonous repaint at 60fps
-        checkKeys()
+    rate(FPS) # synchonous repaint at 60fps
+    check_keys()
     
