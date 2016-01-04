@@ -93,54 +93,48 @@ def read_lidar():
     #INDEX_BYTE = 1
     #SPEED_BYTES = [2,3]
     #DATA_BYTES = [[4,5,6,7],......], ect
+    START_BYTE = 0xFA
+    INDEX_OFFSET = 0xA0
+    NUM_PACKETS = 90
+    SPEED_BYTES = 2
+    DATA_POINTS = 4
+    BYTES_PER_POINT = 4
+
     
-    SPEED_PACKETS = 2
-    DATA_PACKETS = 4
-    DATA_BYTES = 4
-    PACKET_BYTES = 22
     check_sum_errors = 0
     
     while True:
         try:
-            #time.sleep(0.00001) # do not hog the processor power
-            b = ord(ser.read(1))
+            full_data = ser.read(1)
             # start byte
-            if b != 0xFA :
+            if ord(full_data) != START_BYTE :
                 continue
                 
             # position index
-            b = ord(ser.read(1))
-            if b >= 0xA0 and b <= 0xF9 :
-                index = b - 0xA0
-            else:
+            full_data += ser.read(1)
+            index = ord(full_data[1]) - INDEX_OFFSET 
+            if index < 0 or index > NUM_PACKETS :
                 continue
-                
-            # speed
-            b_speed = [ ord(b) for b in ser.read(2)]
-            
-            # data
-            b_data = [[ord(b) for b in ser.read(DATA_BYTES)] for inc in range(DATA_PACKETS)]
-
-            # for the checksum, we need all the data of the packet...
-            # this could be collected in a more elegent fashion...
-            all_data = [ 0xFA, index+0xA0 ] + b_speed + b_data[0] + b_data[1] + b_data[2] + b_data[3]
-
-            # checksum
+            full_data += ser.read(SPEED_BYTES+DATA_POINTS*BYTES_PER_POINT)
             b_check_sum = [ ord(b) for b in ser.read(2) ]
             incoming_check_sum = int(b_check_sum[0]) + (int(b_check_sum[1]) << 8)
 
             # verify that the received checksum is equal to the one computed from the data
-            if check_sum(all_data) == incoming_check_sum:
-                speed_rpm = float( b_speed[0] | (b_speed[1] << 8) ) / 64.0
-                label_speed.text = "RPM : " + str(speed_rpm) 
+            if check_sum([ord(b) for b in full_data]) == incoming_check_sum:
+                #b_speed = [ ord(b) for b in ser.read(2)]
+                #speed_rpm = float( b_speed[0] | (b_speed[1] << 8) ) / 64.0
+                #label_speed.text = "RPM : " + str(speed_rpm) 
+                #b_data = [[ord(b) for b in ser.read(DATA_BYTES)] for inc in range(DATA_PACKETS)]
+                b_data = [[ord(b) for b in full_data[4*(i+1):4*(i+2)]] for i in range(DATA_POINTS)]
+                #b_data = [full_data[4:8],full_data[8:12],full_data[12:16],full_data[16:20]]
             else:
                 # the checksum does not match, something went wrong...
                 check_sum_errors +=1
                 label_errors.text = "errors: "+str(check_sum_errors)
                 # give the samples an error state
-                b_data = [[0, 0x80, 0, 0] for inc in range(DATA_PACKETS)]
+                b_data = [[0, 0x80, 0, 0] for inc in range(DATA_POINTS)]
                 
-            for inc in range(DATA_PACKETS):
+            for inc in range(DATA_POINTS):
                 update_point(index * 4 + inc, b_data[inc])    
 
         except :
