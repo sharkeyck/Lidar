@@ -102,57 +102,47 @@ def read_lidar():
     
     while True:
         try:
-            time.sleep(0.00001) # do not hog the processor power
-
-            if init_level == 0 :
-                b = ord(ser.read(1))
-                # start byte
-                init_level = (b == 0xFA)
+            #time.sleep(0.00001) # do not hog the processor power
+            b = ord(ser.read(1))
+            # start byte
+            if b != 0xFA :
+                continue
                 
-            elif init_level == 1:
-                # position index
-                b = ord(ser.read(1))
-                if b >= 0xA0 and b <= 0xF9 :
-                    index = b - 0xA0
-                    init_level = 2
-                elif b != 0xFA:
-                    init_level = 0
-            elif init_level == 2 :
-                # speed
-                b_speed = [ ord(b) for b in ser.read(2)]
+            # position index
+            b = ord(ser.read(1))
+            if b >= 0xA0 and b <= 0xF9 :
+                index = b - 0xA0
+            else:
+                continue
                 
-                # data
-                b_data = [[ord(b) for b in ser.read(DATA_BYTES)] for inc in range(DATA_PACKETS)]
+            # speed
+            b_speed = [ ord(b) for b in ser.read(2)]
+            
+            # data
+            b_data = [[ord(b) for b in ser.read(DATA_BYTES)] for inc in range(DATA_PACKETS)]
 
-                # for the checksum, we need all the data of the packet...
-                # this could be collected in a more elegent fashion...
-                all_data = [ 0xFA, index+0xA0 ] + b_speed + b_data[0] + b_data[1] + b_data[2] + b_data[3]
+            # for the checksum, we need all the data of the packet...
+            # this could be collected in a more elegent fashion...
+            all_data = [ 0xFA, index+0xA0 ] + b_speed + b_data[0] + b_data[1] + b_data[2] + b_data[3]
 
-                # checksum
-                b_check_sum = [ ord(b) for b in ser.read(2) ]
-                incoming_check_sum = int(b_check_sum[0]) + (int(b_check_sum[1]) << 8)
+            # checksum
+            b_check_sum = [ ord(b) for b in ser.read(2) ]
+            incoming_check_sum = int(b_check_sum[0]) + (int(b_check_sum[1]) << 8)
 
-                # verify that the received checksum is equal to the one computed from the data
-                if check_sum(all_data) == incoming_check_sum:
-                    speed_rpm = float( b_speed[0] | (b_speed[1] << 8) ) / 64.0
-                    label_speed.text = "RPM : " + str(speed_rpm)
-                    
-                    for inc in range(DATA_PACKETS):
-                        update_point(index * 4 + inc, b_data[inc])
-                else:
-                    # the checksum does not match, something went wrong...
-                    check_sum_errors +=1
-                    label_errors.text = "errors: "+str(check_sum_errors)
-                    
-                    # display the samples in an error state
-                    for inc in range(DATA_PACKETS):
-                        update_point(index * 4 + inc, [0, 0x80, 0, 0])
-                    
-                init_level = 0 # reset and wait for the next packet
-            else: # default, should never happen...
-                init_level = 0
-                # TODO not needed once init levels gone
-                raise Exception("Default of whatever this is should never have happened")
+            # verify that the received checksum is equal to the one computed from the data
+            if check_sum(all_data) == incoming_check_sum:
+                speed_rpm = float( b_speed[0] | (b_speed[1] << 8) ) / 64.0
+                label_speed.text = "RPM : " + str(speed_rpm) 
+            else:
+                # the checksum does not match, something went wrong...
+                check_sum_errors +=1
+                label_errors.text = "errors: "+str(check_sum_errors)
+                # give the samples an error state
+                b_data = [[0, 0x80, 0, 0] for inc in range(DATA_PACKETS)]
+                
+            for inc in range(DATA_PACKETS):
+                update_point(index * 4 + inc, b_data[inc])    
+
         except :
             # TODO remove try/except and handle exceptions locally
             traceback.print_exc(file=sys.stdout)
@@ -185,7 +175,6 @@ def read_lidar():
                         b_data = [[0, 0x80, 0, 0] for inc in range(DATA_PACKETS)]
                         
                     for inc in range(DATA_PACKETS) :
-                        print b_data, inc
                         update_point(index * 4 + inc, b_data[inc])
                     init_level = 0
                 else:
