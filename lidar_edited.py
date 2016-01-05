@@ -2,15 +2,12 @@
 #based on code from Nicolas "Xevel" Saugnier
 #requires vpython and pyserial
 
-
-import thread, time, sys, traceback, math
+import thread, time, sys, traceback, math, struct
 
 COM_PORT = "COM4" # example: 5 == "COM6" == "/dev/tty5"
 BAUD_RATE = 115200
 FPS = 60
 OFFSET = 140
-init_level = 0
-index = 0
 
 from visual import *
 point = points(pos=[(0,0,0) for i in range(360)], size=5, color=(0 , 1, 0)) #green, good point
@@ -39,7 +36,6 @@ def parse_point_data( angle, data ):
     
 def update_point( angle, data ):
     """Updates the view of a sample.
-
 Takes the angle (an int, from 0 to 359) and the list of four bytes of data in the order they arrived.
 """
     
@@ -55,7 +51,6 @@ Takes the angle (an int, from 0 to 359) and the list of four bytes of data in th
     reset_display(angle)
     # display the sample
     if is_bad_data:
-        # FIGURE OUT EQUAL WITH POINTS TODO
         return
     else:
         point.pos[angle] = vector( dist_x,0, dist_y)
@@ -64,16 +59,14 @@ Takes the angle (an int, from 0 to 359) and the list of four bytes of data in th
         else:
             point.color[angle] =(0, 1, 0) #green for good quality
 
-
 def check_sum(data):
     """Compute and return the check_sum as an int.
-
-data -- list of 20 bytes (as ints), in the order they arrived in.
+data is a list of 22 bytes (as ints), in the order they arrived in.
+last 2 bytes should be ignored, as they  are the provided checksum.
 """
-    # group the data by word, little-endian
+    #group the data by word, little-endian
     data_list = []
     for t in range(10):
-        #TODO make less confusing
         data_list.append( data[2*t] + (data[2*t+1]<<8) )
     
     # compute the check_sum on 32 bits
@@ -81,108 +74,51 @@ data -- list of 20 bytes (as ints), in the order they arrived in.
     for d in data_list:
         chk32 = (chk32 << 1) + d
 
-    # return a value wrapped around on 15bits, and truncated to still fit into 15 bits
     check_sum = (chk32 & 0x7FFF) + ( chk32 >> 15 ) # wrap around to fit into 15 bits
     check_sum = check_sum & 0x7FFF # truncate to 15 bits
     return int( check_sum )
 
 def read_lidar():
-    global init_level, index
-    #TODO variable for each index in full_data?
     #data string: <start> <index> <speed_L> <speed_H> [Data 0] [Data 1] [Data 2] [Data 3] <checksum_L> <checksum_H>
-    #INDEX_BYTE = 1
-    #SPEED_BYTES = [2,3]
-    #DATA_BYTES = [[4,5,6,7],......], ect
+    
     START_BYTE = 0xFA
     INDEX_OFFSET = 0xA0
     NUM_PACKETS = 90
-    SPEED_BYTES = 2
+    PACKET_BODY_SIZE = 20
     DATA_POINTS = 4
-    BYTES_PER_POINT = 4
-
     
     check_sum_errors = 0
+    index = 0
     
     while True:
-        try:
-            full_data = ser.read(1)
-            # start byte
-            if ord(full_data) != START_BYTE :
-                continue
-                
-            # position index
-            full_data += ser.read(1)
-            index = ord(full_data[1]) - INDEX_OFFSET 
-            if index < 0 or index > NUM_PACKETS :
-                continue
-            full_data += ser.read(SPEED_BYTES+DATA_POINTS*BYTES_PER_POINT)
-            b_check_sum = [ ord(b) for b in ser.read(2) ]
-            incoming_check_sum = int(b_check_sum[0]) + (int(b_check_sum[1]) << 8)
+        #start byte
+        full_data = ser.read(1)
+        if ord(full_data) != START_BYTE :
+            continue 
+        #position index
+        full_data += ser.read(1)
+        index = ord(full_data[1]) - INDEX_OFFSET 
+        if index < 0 or index > NUM_PACKETS :
+            continue
+        full_data += ser.read(PACKET_BODY_SIZE)
+        data = [[] for inc in range(DATA_POINTS)]
+        (speed_rpm, data[0], data[1], data[2], data[3], incoming_check_sum) = struct.unpack('x x H 4s 4s 4s 4s H', full_data)
 
-            # verify that the received checksum is equal to the one computed from the data
-            if check_sum([ord(b) for b in full_data]) == incoming_check_sum:
-                #b_speed = [ ord(b) for b in ser.read(2)]
-                #speed_rpm = float( b_speed[0] | (b_speed[1] << 8) ) / 64.0
-                #label_speed.text = "RPM : " + str(speed_rpm) 
-                #b_data = [[ord(b) for b in ser.read(DATA_BYTES)] for inc in range(DATA_PACKETS)]
-                b_data = [[ord(b) for b in full_data[4*(i+1):4*(i+2)]] for i in range(DATA_POINTS)]
-                #b_data = [full_data[4:8],full_data[8:12],full_data[12:16],full_data[16:20]]
-            else:
-                # the checksum does not match, something went wrong...
-                check_sum_errors +=1
-                label_errors.text = "errors: "+str(check_sum_errors)
-                # give the samples an error state
-                b_data = [[0, 0x80, 0, 0] for inc in range(DATA_POINTS)]
-                
-            for inc in range(DATA_POINTS):
-                update_point(index * 4 + inc, b_data[inc])    
+        # verify that the received checksum is equal to the one computed from the data
+        if check_sum([ord(b) for b in full_data]) == incoming_check_sum:
+            speed_rpm = float( speed_rpm ) / 64.0
+            label_speed.text = "RPM : " + str(speed_rpm) 
+            b_data = [bytearray(data[inc]) for inc in range(DATA_POINTS)]
 
-        except :
-            # TODO remove try/except and handle exceptions locally
-            traceback.print_exc(file=sys.stdout)
-
-                      
-            """if init_level == 0 : #TODO rename to be more packet-y
-                b = ord(ser.read(1)) #TODO look for a read bytes function (not chars)
-                # start byte
-                if b == 0xFA :
-                    #found data packet, compare data check_sum to given check_sum
-                    full_data = [b] + [ord(b) for b in ser.read(PACKET_BYTES-1)]
-                    incoming_check_sum = (int(full_data.pop()) <<8 ) + int(full_data.pop())
-                    if check_sum(full_data) == incoming_check_sum:
-                        #TODO if statements needed? how to except if bad?
-                        if b >= 0xA0 and b <= 0xF9 :
-                            index = full_data[1] - 0xA0
-                        elif b != 0xFA:
-                            init_level = 0
-                        #TODO this is dumb and ugly.
-                        b_speed = [ full_data[2], full_data[3]]
-                        b_data = [full_data[4:8],full_data[8:12],full_data[12:16],full_data[16:20]]
-                        speed_rpm = float( b_speed[0] | (b_speed[1] << 8) ) / 64.0
-                        label_speed.text = "RPM : " + str(speed_rpm)
-                        
-                    else:
-                        # the check_sum does not match, something went wrong...
-                        check_sum_errs +=1
-                        label_errors.text = "errors: "+str(check_sum_errs)
-                        #display the samples in an error state
-                        b_data = [[0, 0x80, 0, 0] for inc in range(DATA_PACKETS)]
-                        
-                    for inc in range(DATA_PACKETS) :
-                        update_point(index * 4 + inc, b_data[inc])
-                    init_level = 0
-                else:
-                    init_level = (b == 0xFA)"""  
+        else:
+            # the checksum does not match, something went wrong...
+            check_sum_errors +=1
+            label_errors.text = "errors: "+str(check_sum_errors)
+            # give the samples an error state
+            b_data = [[0, 0x80, 0, 0] for inc in range(DATA_POINTS)]
             
-def check_keys():
-    if scene.kb.keys: # event waiting to be processed?
-        s = scene.kb.getkey() # get keyboard info
-
-        if s=="j": # Toggle rpm
-            label_speed.visible = not label_speed.visible
-        elif s=="k": # Toggle errors
-            label_errors.visible = not label_errors.visible
-
+        for inc in range(DATA_POINTS):
+            update_point(index * 4 + inc, b_data[inc])    
 
 import serial
 ser = serial.Serial(COM_PORT, BAUD_RATE)
@@ -190,5 +126,3 @@ th = thread.start_new_thread(read_lidar, ())
 
 while True:
     rate(FPS) # synchonous repaint at 60fps
-    check_keys()
-    
