@@ -108,17 +108,17 @@ def read_lidar():
         if check_sum([ord(b) for b in full_data]) == incoming_check_sum:
             speed_rpm = float( speed_rpm ) / 64.0
             label_speed.text = "RPM : " + str(speed_rpm) 
-            b_data = [bytearray(data[inc]) for inc in range(DATA_POINTS)]
+            b_data = [bytearray(d) for d in data]
 
         else:
             # the checksum does not match, something went wrong...
             check_sum_errors +=1
             label_errors.text = "errors: "+str(check_sum_errors)
             # give the samples an error state
-            b_data = [[0, 0x80, 0, 0] for inc in range(DATA_POINTS)]
+            b_data = [[0, 0x80, 0, 0] for d in data]
             
-        for inc in range(DATA_POINTS):
-            update_point(index * 4 + inc, b_data[inc])    
+        for d in b_data:
+            update_point(index * 4 + inc, d)    
 
 import serial
 ser = serial.Serial(COM_PORT, BAUD_RATE)
